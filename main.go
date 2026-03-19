@@ -118,5 +118,20 @@ func check(service Service) Result {
 }
 
 func Aggregate(results []Result) string {
-	return "healthy"
+	healthy := 0
+
+	for _, result := range results {
+		if result.Status == "healthy" {
+			healthy++
+		}
+	}
+
+	switch {
+	case healthy == len(results):
+		return "healthy"
+	case healthy == 0:
+		return "down"
+	default:
+		return "degraded"
+	}
 }
