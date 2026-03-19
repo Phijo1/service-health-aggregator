@@ -1,11 +1,13 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
 	"os"
+	"sync"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -65,15 +67,54 @@ func main() {
 }
 
 func CheckServices(services []Service) []Result {
-	var results []Result
-	result := Result{
-		Name:           "example",
-		Status:         "foo",
-		ResponseTimeMS: 100,
+	var wg sync.WaitGroup
+	ch := make(chan Result)
+
+	for _, service := range services {
+		wg.Add(1)
+
+		go func(svc Service) {
+			defer wg.Done()
+			ch <- check(service)
+		}(service)
 	}
 
-	results = append(results, result)
+	go func() {
+		wg.Wait()
+		close(ch)
+	}()
+
+	var results []Result
+	for result := range ch {
+		results = append(results, result)
+	}
+
 	return results
+}
+
+func check(service Service) Result {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(service.TimeoutMS)*time.Millisecond)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, "GET", service.Url, nil)
+	if err != nil {
+		return Result{Name: service.Name, Status: "down", Error: err.Error()}
+	}
+
+	start := time.Now()
+	resp, err := http.DefaultClient.Do(req)
+	duration := time.Since(start).Milliseconds()
+
+	if err != nil {
+		return Result{Name: service.Name, Status: "down", Error: err.Error()}
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+		return Result{Name: service.Name, Status: "healthy", ResponseTimeMS: duration}
+	}
+
+	return Result{Name: service.Name, Status: "down", Error: fmt.Sprintf("HTTP %d", resp.StatusCode)}
 }
 
 func Aggregate(results []Result) string {
